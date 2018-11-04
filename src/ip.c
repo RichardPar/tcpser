@@ -14,6 +14,9 @@
 #include <netdb.h>
 #include <unistd.h>       // for read...
 #include <stdlib.h>       // for atoi...
+#include <time.h>
+#include <fcntl.h>
+
 
 #include "debug.h"
 #include "ip.h"
@@ -91,11 +94,74 @@ int ip_init_server_conn(char *ip_addr, int port) {
 }
 
 
+int connect_wait (
+    int sockno,
+    struct sockaddr * addr,
+    size_t addrlen,
+    struct timeval * timeout)
+{
+    int res, opt;
+
+    // get socket flags
+    if ((opt = fcntl (sockno, F_GETFL, NULL)) < 0) {
+	return -1;
+    }
+    // set socket non-blocking
+    if (fcntl (sockno, F_SETFL, opt | O_NONBLOCK) < 0) {
+	return -1;
+    }
+
+    // try to connect
+    if ((res = connect (sockno, addr, addrlen)) < 0) {
+	if (errno == EINPROGRESS) {
+	    fd_set wait_set;
+
+	    // make file descriptor set with socket
+	    FD_ZERO (&wait_set);
+	    FD_SET (sockno, &wait_set);
+
+	    // wait for socket to be writable; return after given timeout
+	    res = select (sockno + 1, NULL, &wait_set, NULL, timeout);
+	}
+    }
+    // connection was successful immediately
+    else {
+	res = 1;
+    }
+    // reset socket flags
+    if (fcntl (sockno, F_SETFL, opt) < 0) {
+	return -1;
+    }
+    // an error occured in connect or select
+    if (res < 0) {
+	return -1;
+    }
+    // select timed out
+    else if (res == 0) {
+	errno = ETIMEDOUT;
+	return -1;
+    }
+    // almost finished...
+    else {
+	socklen_t len = sizeof (opt);
+	// check for errors in socket layer
+	if (getsockopt (sockno, SOL_SOCKET, SO_ERROR, &opt, &len) < 0) {
+	    return -1;
+	}
+	// there was an error
+	if (opt) {
+	    errno = opt;
+	    return -1;
+	}
+    }
+    return 0;
+}
 
 int ip_connect(unsigned char addy[]) {
 	struct sockaddr_in pin;
   struct in_addr cin_addr;
 	struct hostent *hp;
+  struct timeval tv;
   int sd=0;
   int port=23;
   unsigned char* address;
@@ -110,6 +176,7 @@ int ip_connect(unsigned char addy[]) {
   }
 
   LOG(LOG_DEBUG,"Calling %s",addy);
+
 	memset(&pin, 0, sizeof(pin));
 
 	/* go find out about the desired host machine */
@@ -133,8 +200,9 @@ int ip_connect(unsigned char addy[]) {
     return -1;
 	}
 
+        tv.tv_sec=5; // 5 Seconds wait to connect
 	/* connect to PORT on HOST */
-	if (connect(sd,(struct sockaddr *)  &pin, sizeof(pin)) == -1) {
+	if (connect_wait(sd,(struct sockaddr *)  &pin, sizeof(pin),&tv) == -1) {
 		ELOG(LOG_ERROR,"could not connect to address");
     return -1;
 	}
