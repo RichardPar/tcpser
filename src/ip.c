@@ -126,7 +126,7 @@ int connect_wait (
     }
     // connection was successful immediately
     else {
-	res = 1;
+	res = 0;
     }
     // reset socket flags
     if (fcntl (sockno, F_SETFL, opt) < 0) {
